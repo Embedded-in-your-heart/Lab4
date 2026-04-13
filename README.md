@@ -1,4 +1,9 @@
-## 安裝步驟：
+## 待完成
+- 藍牙的裝置名稱：BLUENRG
+- Serivice UUID：00000000000111e19ab40002a5d5c51b
+- Charateristic UUID：00E00000000111e1ac360002a5d5c51b
+其中前 2 bytes 是時間戳，3~8 bytes 每 2 bytes 分別對應Y、X、Z軸的加速度，可以開 Notify 更新，請完成 Raspberry Pi 的部分。
+## 藍牙+加速度儀的安裝步驟：
 
 ### 第一步：建立新專案 (Board Selector)
 在 STM32CubeIDE 中，使用「開發板選擇器」可以自動幫你排好基礎引腳：
@@ -47,8 +52,10 @@
 3.  在右側分頁找到 **Tool Settings**。
 4.  找到 **MCU GCC Compiler** (或類似名稱) -> **Include paths**。
 5.  點擊 **Apply and Close**，然後嘗試 **Clean Project** 再重新編譯。
-
-### 測試用程式碼
+## 手動修改過的檔案
+- BLUENRG_MS/App/app_bluenrg_ms.c
+- main.c
+## 測試用程式碼
 最上層要 `#include "custom_motion_sensors.h"`
 ```c
 /* USER CODE BEGIN 2 */

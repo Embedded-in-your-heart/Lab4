@@ -1,0 +1,14 @@
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:87:9:CUSTOM_MOTION_SENSOR_Init	12
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:151:9:CUSTOM_MOTION_SENSOR_DeInit	3
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:177:9:CUSTOM_MOTION_SENSOR_GetCapabilities	3
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:203:9:CUSTOM_MOTION_SENSOR_ReadID	3
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:232:9:CUSTOM_MOTION_SENSOR_Enable	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:271:9:CUSTOM_MOTION_SENSOR_Disable	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:311:9:CUSTOM_MOTION_SENSOR_GetAxes	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:351:9:CUSTOM_MOTION_SENSOR_GetAxesRaw	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:391:9:CUSTOM_MOTION_SENSOR_GetSensitivity	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:432:9:CUSTOM_MOTION_SENSOR_GetOutputDataRate	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:472:9:CUSTOM_MOTION_SENSOR_GetFullScale	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:513:9:CUSTOM_MOTION_SENSOR_SetOutputDataRate	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:553:9:CUSTOM_MOTION_SENSOR_SetFullScale	4
+../X-CUBE-MEMS1/Target/custom_motion_sensors.c:599:16:LSM6DSL_0_Probe	14

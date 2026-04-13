@@ -2,6 +2,7 @@
 - 藍牙的裝置名稱：BLUENRG
 - Serivice UUID：00000000000111e19ab40002a5d5c51b
 - Charateristic UUID：00E00000000111e1ac360002a5d5c51b
+
 其中前 2 bytes 是時間戳，3~8 bytes 每 2 bytes 分別對應Y、X、Z軸的加速度，可以開 Notify 更新，請完成 Raspberry Pi 的部分。
 ## 藍牙+加速度儀的安裝步驟：
 

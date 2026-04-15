@@ -146,7 +146,12 @@ def scan_devices(timeout=10):
     """Scan for BLE peripherals and return only named devices."""
     print(f"\nScanning for BLE devices ({timeout} sec) ...")
     scanner = Scanner().withDelegate(ScanDelegate())
-    devices = scanner.scan(timeout)
+    try:
+        devices = scanner.scan(timeout)
+    except BTLEException:
+        # bluepy may raise BTLEDisconnectError when scan stops;
+        # the scanned devices are still available on the scanner object.
+        devices = scanner.getDevices()
 
     # Filter out devices without a name
     named = [d for d in devices if d.getValueText(0x09)]

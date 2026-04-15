@@ -199,8 +199,10 @@ def discover_and_subscribe(peripheral):
             if uuid_str in target_chars:
                 name = target_chars[uuid_str]
                 val_handle = ch.getHandle()
-                # The notification data arrives on the value handle
+                # Map both the handle and handle+1 so we catch
+                # notifications regardless of bluepy version quirks
                 handle_map[val_handle] = name
+                handle_map[val_handle + 1] = name
                 if "NOTIFY" in props or "INDICATE" in props:
                     chars_to_subscribe.append((ch, name, svc))
 
@@ -269,10 +271,14 @@ def main():
         print(f"{'='*60}\n")
 
         while True:
-            peripheral.waitForNotification(1.0)
+            if not peripheral.waitForNotification(1.0):
+                # No notification within 1 sec — just keep waiting
+                pass
 
     except BTLEException as e:
         print(f"BLE Error: {e}")
+    except Exception as e:
+        print(f"Unexpected error: {type(e).__name__}: {e}")
     finally:
         cleanup()
 

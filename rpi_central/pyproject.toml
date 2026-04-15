@@ -1,0 +1,11 @@
+[project]
+name = "rpi-central"
+version = "0.1.0"
+description = "BLE Central receiver for STM32 B-L475E-IOT01A SensorDemo"
+requires-python = ">=3.8"
+dependencies = [
+    "bluepy>=1.3.0",
+]
+
+[project.scripts]
+ble-central = "ble_central:main"

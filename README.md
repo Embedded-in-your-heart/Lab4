@@ -176,17 +176,15 @@ Prerequisites: Raspberry Pi 3/4/5 with Bluetooth, Python 3.8+, [uv](https://docs
 # 1. Clone the repo and enter the central directory
 cd rpi_central
 
-# 2. Create virtual environment and install dependencies via uv
-uv venv
-source .venv/bin/activate
-uv pip install -r requirements.txt
+# 2. Install dependencies via uv (auto-creates venv and resolves pyproject.toml)
+uv sync
 
 # 3. Run the BLE Central (requires root for BLE access)
-sudo .venv/bin/python ble_central.py
+sudo uv run ble_central.py
 ```
 
 > **Note:** `sudo` is required because bluepy needs root privileges to access the BLE adapter.
-> Using `.venv/bin/python` explicitly ensures the venv packages are available under `sudo`.
+> `uv run` automatically uses the project venv, even under `sudo`.
 
 After launching, the script will:
  1. Scan for nearby BLE devices (10 seconds)

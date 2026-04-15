@@ -15,7 +15,7 @@ from ble_central import parse_environmental, parse_acc_gyro_mag, parse_quaternio
 class TestParseEnvironmental:
     def test_valid_packet(self):
         # timestamp=100, pressure=101320 (1013.20 hPa), temperature=264 (26.4 C)
-        data = struct.pack("<HiH", 100, 101320, 264)
+        data = struct.pack("<Hih", 100, 101320, 264)
         result = parse_environmental(data)
         assert result is not None
         assert result["timestamp"] == 100
@@ -26,15 +26,15 @@ class TestParseEnvironmental:
         assert parse_environmental(b"\x00" * 7) is None
 
     def test_exact_length(self):
-        data = struct.pack("<HiH", 0, 0, 0)
+        data = struct.pack("<Hih", 0, 0, 0)
         result = parse_environmental(data)
         assert result is not None
 
-    def test_large_temperature(self):
-        # temperature = 500 => 50.0 C
-        data = struct.pack("<HiH", 1, 100000, 500)
+    def test_negative_temperature(self):
+        # temperature = -50 => -5.0 C
+        data = struct.pack("<Hih", 1, 100000, -50)
         result = parse_environmental(data)
-        assert abs(result["temperature_C"] - 50.0) < 0.01
+        assert abs(result["temperature_C"] - (-5.0)) < 0.01
 
 
 class TestParseAccGyroMag:

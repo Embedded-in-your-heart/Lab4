@@ -40,7 +40,7 @@ def parse_environmental(data):
     """
     if len(data) < 8:
         return None
-    ts, press, temp = struct.unpack('<HiH', data[:8])
+    ts, press, temp = struct.unpack('<Hih', data[:8])
     return {
         'timestamp': ts,
         'pressure_hPa': press / 100.0,

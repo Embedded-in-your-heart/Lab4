@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BLE SENSOR DASHBOARD</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0d1117;
+      color: #c9d1d9;
+      font-family: 'Courier New', Courier, monospace;
+      font-size: 13px;
+      min-height: 100vh;
+      padding: 16px;
+    }
+
+    /* ── Status bar ── */
+    #status-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid #30363d;
+      padding-bottom: 10px;
+      margin-bottom: 16px;
+    }
+    .title { color: #58a6ff; font-size: 14px; font-weight: bold; letter-spacing: 1px; }
+    #status-indicator { font-size: 11px; }
+    #status-indicator.connected    { color: #3fb950; }
+    #status-indicator.disconnected { color: #f78166; }
+
+    /* ── Sections ── */
+    .sensor-section { margin-bottom: 20px; }
+    .section-title {
+      color: #8b949e;
+      font-size: 10px;
+      letter-spacing: 2px;
+      margin-bottom: 10px;
+    }
+
+    /* ── Card grid ── */
+    .card-row          { display: grid; gap: 8px; }
+    .card-row.two-col  { grid-template-columns: 1fr 1fr; }
+    .card-row.one-col  { grid-template-columns: 1fr; }
+
+    .card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 10px;
+      transition: opacity 0.3s;
+    }
+    .card.stale { opacity: 0.45; }
+
+    .label {
+      color: #8b949e;
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      margin-bottom: 4px;
+    }
+
+    /* ── ENV big value: number + unit in separate spans ── */
+    .big-value { font-size: 22px; font-weight: bold; color: #58a6ff; margin-bottom: 6px; }
+    .unit      { font-size: 11px; color: #8b949e; margin-left: 3px; }
+
+    /* ── XYZ row ── */
+    .xyz-row             { display: flex; gap: 16px; margin-bottom: 6px; font-size: 12px; }
+    .xyz-row .axis       { color: #8b949e; }
+    .xyz-row .val        { font-weight: bold; }
+    .xyz-row .val.acc    { color: #3fb950; }
+    .xyz-row .val.gyro   { color: #f78166; }
+    .xyz-row .val.mag    { color: #e3b341; }
+    .xyz-row .val.quat   { color: #d2a8ff; }
+
+    /* ── Sparkline ── */
+    .sparkline { width: 100%; height: 40px; display: block; overflow: visible; }
+  </style>
+</head>
+<body>
+
+<!-- Status bar -->
+<div id="status-bar">
+  <span class="title">⬤ BLE SENSOR DASHBOARD</span>
+  <span id="status-indicator" class="disconnected">◯ DISCONNECTED</span>
+</div>
+
+<!-- ── ENVIRONMENTAL ── -->
+<div class="sensor-section">
+  <div class="section-title">── ENVIRONMENTAL ─────────────────────────────</div>
+  <div class="card-row two-col">
+
+    <div class="card" id="card-temp">
+      <div class="label">TEMPERATURE</div>
+      <div class="big-value">
+        <span id="val-temp">--.-</span><span class="unit">°C</span>
+      </div>
+      <svg class="sparkline" id="chart-temp"></svg>
+    </div>
+
+    <div class="card" id="card-press">
+      <div class="label">PRESSURE</div>
+      <div class="big-value">
+        <span id="val-press">----</span><span class="unit">hPa</span>
+      </div>
+      <svg class="sparkline" id="chart-press"></svg>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── IMU ── -->
+<div class="sensor-section">
+  <div class="section-title">── IMU ───────────────────────────────────────</div>
+  <div class="card-row one-col">
+
+    <div class="card" id="card-acc">
+      <div class="label">ACCELEROMETER (mg)</div>
+      <div class="xyz-row">
+        <span><span class="axis">X </span><span class="val acc" id="val-acc-x">----</span></span>
+        <span><span class="axis">Y </span><span class="val acc" id="val-acc-y">----</span></span>
+        <span><span class="axis">Z </span><span class="val acc" id="val-acc-z">----</span></span>
+      </div>
+      <svg class="sparkline" id="chart-acc"></svg>
+    </div>
+
+    <div class="card" id="card-gyro">
+      <div class="label">GYROSCOPE (mdps)</div>
+      <div class="xyz-row">
+        <span><span class="axis">X </span><span class="val gyro" id="val-gyro-x">----</span></span>
+        <span><span class="axis">Y </span><span class="val gyro" id="val-gyro-y">----</span></span>
+        <span><span class="axis">Z </span><span class="val gyro" id="val-gyro-z">----</span></span>
+      </div>
+      <svg class="sparkline" id="chart-gyro"></svg>
+    </div>
+
+    <div class="card" id="card-mag">
+      <div class="label">MAGNETOMETER</div>
+      <div class="xyz-row">
+        <span><span class="axis">X </span><span class="val mag" id="val-mag-x">----</span></span>
+        <span><span class="axis">Y </span><span class="val mag" id="val-mag-y">----</span></span>
+        <span><span class="axis">Z </span><span class="val mag" id="val-mag-z">----</span></span>
+      </div>
+      <svg class="sparkline" id="chart-mag"></svg>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── QUATERNIONS ── -->
+<div class="sensor-section">
+  <div class="section-title">── QUATERNIONS ───────────────────────────────</div>
+  <div class="card-row one-col">
+    <div class="card" id="card-quat">
+      <div class="label">QUATERNIONS</div>
+      <div class="xyz-row">
+        <span><span class="axis">qX </span><span class="val quat" id="val-qx">----</span></span>
+        <span><span class="axis">qY </span><span class="val quat" id="val-qy">----</span></span>
+        <span><span class="axis">qZ </span><span class="val quat" id="val-qz">----</span></span>
+      </div>
+      <svg class="sparkline" id="chart-quat"></svg>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── Sparkline engine ──────────────────────────────────────────────────────
+  const HISTORY = 60;
+
+  const buf = {};
+  function getBuf(key) {
+    if (!buf[key]) buf[key] = [];
+    return buf[key];
+  }
+  function push(key, val) {
+    const b = getBuf(key);
+    b.push(val);
+    if (b.length > HISTORY) b.shift();
+  }
+
+  function renderSparkline(svgId, seriesKeys, colors) {
+    const svg = document.getElementById(svgId);
+    if (!svg) return;
+    const W = svg.clientWidth || 200;
+    const H = svg.clientHeight || 40;
+    const PAD = 2;
+
+    const series = seriesKeys.map(k => getBuf(k));
+    const allVals = series.flat();
+    if (allVals.length === 0) return;
+
+    let mn = Math.min(...allVals);
+    let mx = Math.max(...allVals);
+    if (mn === mx) { mn -= 1; mx += 1; }
+
+    const polylines = series.map((data, i) => {
+      if (data.length < 2) return '';
+      const pts = data.map((v, j) => {
+        const x = PAD + (j / (HISTORY - 1)) * (W - PAD * 2);
+        const y = (H - PAD) - ((v - mn) / (mx - mn)) * (H - PAD * 2);
+        return x.toFixed(1) + ',' + y.toFixed(1);
+      }).join(' ');
+      const opacity = i === 0 ? '1' : '0.7';
+      return '<polyline points="' + pts + '" fill="none" stroke="' + colors[i] + '" stroke-width="1.5" opacity="' + opacity + '"/>';
+    }).join('');
+
+    // Safe: polylines is built from numbers and hardcoded hex color strings only
+    svg.innerHTML = polylines;
+  }
+
+  // ── Status ────────────────────────────────────────────────────────────────
+  const ALL_CARDS = ['card-temp','card-press','card-acc','card-gyro','card-mag','card-quat'];
+
+  function setConnected(connected, addr) {
+    const el = document.getElementById('status-indicator');
+    if (connected) {
+      el.textContent = '● CONNECTED  ' + (addr || '');
+      el.className = 'connected';
+      ALL_CARDS.forEach(id => document.getElementById(id).classList.remove('stale'));
+    } else {
+      el.textContent = '◯ DISCONNECTED';
+      el.className = 'disconnected';
+      ALL_CARDS.forEach(id => document.getElementById(id).classList.add('stale'));
+    }
+  }
+
+  // ── Socket.IO ─────────────────────────────────────────────────────────────
+  const socket = io();
+
+  socket.on('connect',    () => setConnected(true,  null));
+  socket.on('disconnect', () => setConnected(false, null));
+  socket.on('status', (d) => setConnected(d.connected, d.addr));
+
+  socket.on('env', (d) => {
+    document.getElementById('val-temp').textContent  = d.temperature_C.toFixed(1);
+    document.getElementById('val-press').textContent = d.pressure_hPa.toFixed(1);
+    push('temp',  d.temperature_C);
+    push('press', d.pressure_hPa);
+    renderSparkline('chart-temp',  ['temp'],  ['#58a6ff']);
+    renderSparkline('chart-press', ['press'], ['#58a6ff']);
+  });
+
+  socket.on('imu', (d) => {
+    document.getElementById('val-acc-x').textContent  = fmtInt(d.acc_x);
+    document.getElementById('val-acc-y').textContent  = fmtInt(d.acc_y);
+    document.getElementById('val-acc-z').textContent  = fmtInt(d.acc_z);
+    document.getElementById('val-gyro-x').textContent = fmtInt(d.gyro_x);
+    document.getElementById('val-gyro-y').textContent = fmtInt(d.gyro_y);
+    document.getElementById('val-gyro-z').textContent = fmtInt(d.gyro_z);
+    document.getElementById('val-mag-x').textContent  = fmtInt(d.mag_x);
+    document.getElementById('val-mag-y').textContent  = fmtInt(d.mag_y);
+    document.getElementById('val-mag-z').textContent  = fmtInt(d.mag_z);
+
+    push('acc_x',  d.acc_x);  push('acc_y',  d.acc_y);  push('acc_z',  d.acc_z);
+    push('gyro_x', d.gyro_x); push('gyro_y', d.gyro_y); push('gyro_z', d.gyro_z);
+    push('mag_x',  d.mag_x);  push('mag_y',  d.mag_y);  push('mag_z',  d.mag_z);
+
+    renderSparkline('chart-acc',  ['acc_x',  'acc_y',  'acc_z'],  ['#3fb950','#58a6ff','#f78166']);
+    renderSparkline('chart-gyro', ['gyro_x', 'gyro_y', 'gyro_z'], ['#f78166','#e3b341','#d2a8ff']);
+    renderSparkline('chart-mag',  ['mag_x',  'mag_y',  'mag_z'],  ['#e3b341','#58a6ff','#3fb950']);
+  });
+
+  socket.on('quat', (d) => {
+    document.getElementById('val-qx').textContent = fmtInt(d.q_x);
+    document.getElementById('val-qy').textContent = fmtInt(d.q_y);
+    document.getElementById('val-qz').textContent = fmtInt(d.q_z);
+    push('q_x', d.q_x); push('q_y', d.q_y); push('q_z', d.q_z);
+    renderSparkline('chart-quat', ['q_x','q_y','q_z'], ['#d2a8ff','#58a6ff','#f78166']);
+  });
+
+  // Format integer with explicit sign, padded to 4 digits
+  function fmtInt(v) {
+    const sign = v >= 0 ? '+' : '-';
+    return sign + String(Math.abs(v)).padStart(4, '0');
+  }
+</script>
+</body>
+</html>

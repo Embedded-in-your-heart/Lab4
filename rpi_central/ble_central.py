@@ -143,19 +143,21 @@ class NotificationDelegate(DefaultDelegate):
 # ---------------------------------------------------------------------------
 
 def scan_devices(timeout=10):
-    """Scan for BLE peripherals and return the discovered device list."""
+    """Scan for BLE peripherals and return only named devices."""
     print(f"\nScanning for BLE devices ({timeout} sec) ...")
     scanner = Scanner().withDelegate(ScanDelegate())
     devices = scanner.scan(timeout)
-    dev_list = list(devices)
+
+    # Filter out devices without a name
+    named = [d for d in devices if d.getValueText(0x09)]
 
     print(f"\n{'='*60}")
-    print(f" Found {len(dev_list)} device(s)")
+    print(f" Found {len(named)} named device(s)  (unnamed filtered out)")
     print(f"{'='*60}")
-    for i, d in enumerate(dev_list):
-        name = d.getValueText(0x09) or "(unknown)"
+    for i, d in enumerate(named):
+        name = d.getValueText(0x09)
         print(f"  [{i}] {d.addr}  type={d.addrType}  RSSI={d.rssi} dB  {name}")
-    return dev_list
+    return named
 
 
 def select_device(dev_list):
@@ -270,10 +272,9 @@ def main():
         print(" Listening for sensor data ... (Ctrl+C to stop)")
         print(f"{'='*60}\n")
 
+        # bluepy uses waitForNotifications (with trailing 's')
         while True:
-            if not peripheral.waitForNotification(1.0):
-                # No notification within 1 sec — just keep waiting
-                pass
+            peripheral.waitForNotifications(1.0)
 
     except BTLEException as e:
         print(f"BLE Error: {e}")

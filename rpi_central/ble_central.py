@@ -14,6 +14,11 @@ import signal
 import sys
 from bluepy.btle import Scanner, DefaultDelegate, Peripheral, BTLEException
 
+import threading
+
+from flask import Flask, render_template
+from flask_socketio import SocketIO
+
 # ---------------------------------------------------------------------------
 # GATT UUIDs (must match gatt_db.c on the STM32 side)
 # ---------------------------------------------------------------------------
@@ -26,6 +31,18 @@ QUATERNIONS_CHAR_UUID = "00000100-0001-11e1-ac36-0002a5d5c51b"
 
 # CCCD descriptor UUID (standard BLE)
 CCCD_UUID = 0x2902
+
+# ---------------------------------------------------------------------------
+# Flask + SocketIO (web dashboard)
+# ---------------------------------------------------------------------------
+app = Flask(__name__)
+socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
 
 # ---------------------------------------------------------------------------
 # Data parsing helpers
@@ -119,6 +136,11 @@ class NotificationDelegate(DefaultDelegate):
             if parsed:
                 print(f"[ENV]  T={parsed['temperature_C']:.1f} C  "
                       f"P={parsed['pressure_hPa']:.2f} hPa")
+                socketio.emit("env", {
+                    "temperature_C": parsed["temperature_C"],
+                    "pressure_hPa":  parsed["pressure_hPa"],
+                    "timestamp":     parsed["timestamp"],
+                })
                 return
 
         elif name == "AccGyroMag":
@@ -126,15 +148,32 @@ class NotificationDelegate(DefaultDelegate):
             if parsed:
                 print(f"[IMU]  Acc=({parsed['acc_x_mg']:>6d}, {parsed['acc_y_mg']:>6d}, {parsed['acc_z_mg']:>6d}) mg  "
                       f"Gyro=({parsed['gyro_x_mdps']:>7d}, {parsed['gyro_y_mdps']:>7d}, {parsed['gyro_z_mdps']:>7d}) mdps")
+                socketio.emit("imu", {
+                    "acc_x":  parsed["acc_x_mg"],
+                    "acc_y":  parsed["acc_y_mg"],
+                    "acc_z":  parsed["acc_z_mg"],
+                    "gyro_x": parsed["gyro_x_mdps"],
+                    "gyro_y": parsed["gyro_y_mdps"],
+                    "gyro_z": parsed["gyro_z_mdps"],
+                    "mag_x":  parsed["mag_x"],
+                    "mag_y":  parsed["mag_y"],
+                    "mag_z":  parsed["mag_z"],
+                    "timestamp": parsed["timestamp"],
+                })
                 return
 
         elif name == "Quaternions":
             parsed = parse_quaternions(data)
             if parsed:
                 print(f"[QUAT] X={parsed['q_x']:>6d}  Y={parsed['q_y']:>6d}  Z={parsed['q_z']:>6d}")
+                socketio.emit("quat", {
+                    "q_x": parsed["q_x"],
+                    "q_y": parsed["q_y"],
+                    "q_z": parsed["q_z"],
+                    "timestamp": parsed["timestamp"],
+                })
                 return
 
-        # Fallback: print raw hex
         print(f"[{name}] Raw: {data.hex()}")
 
 
@@ -238,7 +277,6 @@ def discover_and_subscribe(peripheral):
 # ---------------------------------------------------------------------------
 
 def main():
-    # Scan and select device
     dev_list = scan_devices(timeout=10)
     if not dev_list:
         print("No devices found. Make sure the STM32 board is advertising.")
@@ -251,6 +289,7 @@ def main():
 
     def cleanup(signum=None, frame=None):
         print("\nDisconnecting ...")
+        socketio.emit("status", {"connected": False, "addr": None})
         try:
             peripheral.disconnect()
         except Exception:
@@ -259,34 +298,40 @@ def main():
 
     signal.signal(signal.SIGINT, cleanup)
 
-    try:
-        peripheral.connect(dev.addr, dev.addrType)
-        print("Connected!")
+    def ble_loop():
+        try:
+            peripheral.connect(dev.addr, dev.addrType)
+            print("Connected!")
 
-        # Discover services and enable notifications
-        handle_map = discover_and_subscribe(peripheral)
+            handle_map = discover_and_subscribe(peripheral)
 
-        if not handle_map:
-            print("No target characteristics found. Is this the correct device?")
+            if not handle_map:
+                print("No target characteristics found. Is this the correct device?")
+                cleanup()
+                return
+
+            peripheral.withDelegate(NotificationDelegate(handle_map))
+            socketio.emit("status", {"connected": True, "addr": dev.addr})
+
+            print(f"\n{'='*60}")
+            print(" Listening for sensor data ... (Ctrl+C to stop)")
+            print(f"{'='*60}\n")
+
+            while True:
+                peripheral.waitForNotifications(1.0)
+
+        except BTLEException as e:
+            print(f"BLE Error: {e}")
+        except Exception as e:
+            print(f"Unexpected error: {type(e).__name__}: {e}")
+        finally:
             cleanup()
 
-        # Set notification delegate
-        peripheral.withDelegate(NotificationDelegate(handle_map))
+    ble_thread = threading.Thread(target=ble_loop, daemon=True)
+    ble_thread.start()
 
-        print(f"\n{'='*60}")
-        print(" Listening for sensor data ... (Ctrl+C to stop)")
-        print(f"{'='*60}\n")
-
-        # bluepy uses waitForNotifications (with trailing 's')
-        while True:
-            peripheral.waitForNotifications(1.0)
-
-    except BTLEException as e:
-        print(f"BLE Error: {e}")
-    except Exception as e:
-        print(f"Unexpected error: {type(e).__name__}: {e}")
-    finally:
-        cleanup()
+    print(f"\nDashboard available at http://0.0.0.0:5000")
+    socketio.run(app, host="0.0.0.0", port=5000, use_reloader=False, log_output=True)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,73 @@ Known limitations:
   virtual folder and delete, from Src and Inc folders, the files: stm32l4xx_nucleo.c, stm32l4xx_nucleo.h
   and stm32l4xx_nucleo_errno.h.
 
+### <b>GATT Database</b>
+
+#### Service 1: Hardware Service (HW\_Serv\_W2ST)
+
+| Field | Value |
+|-------|-------|
+| **UUID** | `00000000-0001-11e1-9ab4-0002a5d5c51b` |
+| **Type** | Primary Service |
+
+**Characteristic 1-1: Environmental**
+
+| Field | Value |
+|-------|-------|
+| **UUID** | `00140000-0001-11e1-ac36-0002a5d5c51b` |
+| **Properties** | Notify, Read |
+| **Value Length** | 8 bytes |
+| **Data Format** | `[timestamp:2][pressure:4][temperature:2]` |
+
+- `timestamp` (2 bytes, LE): `HAL_GetTick() >> 3`
+- `pressure` (4 bytes, LE): int32, unit = 1/100 hPa (e.g. 100000 = 1000.00 hPa)
+- `temperature` (2 bytes, LE): int16, unit = 1/10 °C (e.g. 250 = 25.0 °C)
+- **Data Source**: Temperature from LSM6DSL internal sensor; pressure is a fixed placeholder (no LPS22HB driver)
+
+**Characteristic 1-2: AccGyroMag**
+
+| Field | Value |
+|-------|-------|
+| **UUID** | `00E00000-0001-11e1-ac36-0002a5d5c51b` |
+| **Properties** | Notify |
+| **Value Length** | 20 bytes |
+| **Data Format** | `[timestamp:2][acc_x:2][acc_y:2][acc_z:2][gyro_x:2][gyro_y:2][gyro_z:2][mag_x:2][mag_y:2][mag_z:2]` |
+
+- `timestamp` (2 bytes, LE): `HAL_GetTick() >> 3`
+- `acc_{x,y,z}` (2 bytes each, LE): int16, accelerometer in mg — **real data from LSM6DSL**
+- `gyro_{x,y,z}` (2 bytes each, LE): int16, gyroscope in mdps — **real data from LSM6DSL**
+- `mag_{x,y,z}` (2 bytes each, LE): int16, magnetometer — fixed 0 (no LSM3MDL driver)
+
+#### Service 2: Software Service (SW\_Serv\_W2ST)
+
+| Field | Value |
+|-------|-------|
+| **UUID** | `00000000-0002-11e1-9ab4-0002a5d5c51b` |
+| **Type** | Primary Service |
+
+**Characteristic 2-1: Quaternions**
+
+| Field | Value |
+|-------|-------|
+| **UUID** | `00000100-0001-11e1-ac36-0002a5d5c51b` |
+| **Properties** | Notify |
+| **Value Length** | 8 bytes (2 + 6 × SEND\_N\_QUATERNIONS) |
+| **Data Format** | `[timestamp:2][qi_x:2][qi_y:2][qi_z:2]` |
+
+- `timestamp` (2 bytes, LE): `HAL_GetTick() >> 3`
+- `qi_{x,y,z}` (2 bytes each, LE): int16, derived from accelerometer tilt data
+- `SEND_N_QUATERNIONS` = 1
+
+### <b>Sensor Data Sources</b>
+
+| Sensor Type | Source | Component | Notes |
+|-------------|--------|-----------|-------|
+| Accelerometer | **Real** | LSM6DSL (I2C2) | 3-axis, unit: mg |
+| Gyroscope | **Real** | LSM6DSL (I2C2) | 3-axis, unit: mdps |
+| Temperature | **Real** | LSM6DSL internal | Accuracy ~±1°C |
+| Magnetometer | Unavailable | — | LSM3MDL driver not included, value = 0 |
+| Pressure | Placeholder | — | LPS22HB driver not included, fixed 1000.00 hPa |
+
 ### <b>Keywords</b>
 
 BLE, Peripheral, SPI, BlueNRG-M0, BlueNRG-MS
@@ -100,6 +167,39 @@ In order to make the program work, you must do the following:
 
  - Alternatively, you can download the pre-built binaries in "Binary" 
    folder included in the distributed package.
+
+### <b>How to run the BLE Central on Raspberry Pi</b>
+
+Prerequisites: Raspberry Pi 3/4/5 with Bluetooth, Python 3.8+, [uv](https://docs.astral.sh/uv/) installed.
+
+```bash
+# 1. Clone the repo and enter the central directory
+cd rpi_central
+
+# 2. Create virtual environment and install dependencies via uv
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+
+# 3. Run the BLE Central (requires root for BLE access)
+sudo .venv/bin/python ble_central.py
+```
+
+> **Note:** `sudo` is required because bluepy needs root privileges to access the BLE adapter.
+> Using `.venv/bin/python` explicitly ensures the venv packages are available under `sudo`.
+
+After launching, the script will:
+ 1. Scan for nearby BLE devices (10 seconds)
+ 2. List discovered devices — select the STM32 board by index
+ 3. Connect and automatically subscribe to Environmental, AccGyroMag, and Quaternions notifications
+ 4. Print parsed sensor data in real-time; press `Ctrl+C` to disconnect
+
+Example output:
+```
+[ENV]  T=26.3 C  P=1000.00 hPa
+[IMU]  Acc=(   -23,    41,  1004) mg  Gyro=(   1250,   -870,    340) mdps
+[QUAT] X=   -23  Y=    41  Z=  1004
+```
 
 ### <b>Author</b>
 

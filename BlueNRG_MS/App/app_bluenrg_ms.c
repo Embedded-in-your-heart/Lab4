@@ -36,6 +36,9 @@
 #include "sm.h"
 #include "stm32l4xx_hal_tim.h"
 
+#include "custom_motion_sensors.h"
+#include "lsm6dsl.h"
+
 /* USER CODE BEGIN Includes */
 
 /* USER CODE END Includes */
@@ -70,9 +73,8 @@ static volatile uint8_t user_button_pressed = 0;
 /* Private function prototypes -----------------------------------------------*/
 static void User_Process(void);
 static void User_Init(void);
-static void Set_Random_Environmental_Values(float *data_t, float *data_p);
-static void Set_Random_Motion_Values(uint32_t cnt);
-static void Reset_Motion_Values(void);
+static void Read_Sensor_Data(void);
+static float Read_LSM6DSL_Temperature(void);
 
 /* USER CODE BEGIN PFP */
 
@@ -239,6 +241,16 @@ static void User_Init(void)
   BSP_LED_Init(LED2);
 
   BSP_COM_Init(COM1);
+
+  /* Initialize LSM6DSL accelerometer and gyroscope */
+  if (CUSTOM_MOTION_SENSOR_Init(CUSTOM_LSM6DSL_0, MOTION_ACCELERO | MOTION_GYRO) != BSP_ERROR_NONE)
+  {
+    PRINTF("LSM6DSL sensor init failed!\n");
+  }
+  else
+  {
+    PRINTF("LSM6DSL sensor initialized (Accel + Gyro)\n");
+  }
 }
 
 /**
@@ -250,10 +262,6 @@ static void User_Init(void)
  */
 static void User_Process(void)
 {
-  float data_t;
-  float data_p;
-  static uint32_t counter = 0;
-
   if (set_connectable)
   {
     Set_DeviceConnectable();
@@ -277,23 +285,23 @@ static void User_Process(void)
 
     if (connected)
     {
-      /* Set a random seed */
-      srand(HAL_GetTick());
+      /* Read real sensor data from LSM6DSL */
+      Read_Sensor_Data();
 
-      /* Update emulated Environmental data */
-      Set_Random_Environmental_Values(&data_t, &data_p);
-      BlueMS_Environmental_Update((int32_t)(data_p *100), (int16_t)(data_t * 10));
+      /* Update Environmental data (temperature from LSM6DSL, no pressure sensor) */
+      float temp = Read_LSM6DSL_Temperature();
+      int32_t press = 100000; /* No LPS22HB driver: fixed 1000.00 hPa placeholder */
+      BlueMS_Environmental_Update(press, (int16_t)(temp * 10));
 
-      /* Update emulated Acceleration, Gyroscope and Sensor Fusion data */
-      Set_Random_Motion_Values(counter);
+      /* Update Acceleration, Gyroscope and Magnetometer data */
       Acc_Update(&x_axes, &g_axes, &m_axes);
+
+      /* Update Quaternions (simple tilt estimation from accelerometer) */
+      q_axes.AXIS_X = x_axes.AXIS_X;
+      q_axes.AXIS_Y = x_axes.AXIS_Y;
+      q_axes.AXIS_Z = x_axes.AXIS_Z;
       Quat_Update(&q_axes);
 
-      counter ++;
-      if (counter == 40) {
-        counter = 0;
-        Reset_Motion_Values();
-      }
 #if !USE_BUTTON
       HAL_Delay(1000); /* wait 1 sec before sending new data */
 #endif
@@ -306,77 +314,53 @@ static void User_Process(void)
 }
 
 /**
- * @brief  Set random values for all environmental sensor data
- * @param  float pointer to temperature data
- * @param  float pointer to pressure data
+ * @brief  Read real motion sensor data from LSM6DSL
  * @retval None
  */
-static void Set_Random_Environmental_Values(float *data_t, float *data_p)
+static void Read_Sensor_Data(void)
 {
-  *data_t = 27.0 + ((uint64_t)rand()*5)/RAND_MAX;     /* T sensor emulation */
-  *data_p = 1000.0 + ((uint64_t)rand()*80)/RAND_MAX; /* P sensor emulation */
+  CUSTOM_MOTION_SENSOR_Axes_t acc_axes;
+  CUSTOM_MOTION_SENSOR_Axes_t gyro_axes;
+
+  /* Read accelerometer data (in mg) */
+  if (CUSTOM_MOTION_SENSOR_GetAxes(CUSTOM_LSM6DSL_0, MOTION_ACCELERO, &acc_axes) == BSP_ERROR_NONE)
+  {
+    x_axes.AXIS_X = acc_axes.x;
+    x_axes.AXIS_Y = acc_axes.y;
+    x_axes.AXIS_Z = acc_axes.z;
+  }
+
+  /* Read gyroscope data (in mdps) */
+  if (CUSTOM_MOTION_SENSOR_GetAxes(CUSTOM_LSM6DSL_0, MOTION_GYRO, &gyro_axes) == BSP_ERROR_NONE)
+  {
+    g_axes.AXIS_X = gyro_axes.x;
+    g_axes.AXIS_Y = gyro_axes.y;
+    g_axes.AXIS_Z = gyro_axes.z;
+  }
+
+  /* No magnetometer driver available (LSM3MDL not included) */
+  m_axes.AXIS_X = 0;
+  m_axes.AXIS_Y = 0;
+  m_axes.AXIS_Z = 0;
 }
 
 /**
- * @brief  Set random values for all motion sensor data
- * @param  uint32_t counter for changing the rotation direction
- * @retval None
+ * @brief  Read temperature from LSM6DSL internal sensor
+ * @retval Temperature in degrees Celsius
  */
-static void Set_Random_Motion_Values(uint32_t cnt)
+static float Read_LSM6DSL_Temperature(void)
 {
-  /* Update Acceleration, Gyroscope and Sensor Fusion data */
-  if (cnt < 20) {
-    x_axes.AXIS_X +=  (10  + ((uint64_t)rand()*3*cnt)/RAND_MAX);
-    x_axes.AXIS_Y += -(10  + ((uint64_t)rand()*5*cnt)/RAND_MAX);
-    x_axes.AXIS_Z +=  (10  + ((uint64_t)rand()*7*cnt)/RAND_MAX);
-    g_axes.AXIS_X +=  (100 + ((uint64_t)rand()*2*cnt)/RAND_MAX);
-    g_axes.AXIS_Y += -(100 + ((uint64_t)rand()*4*cnt)/RAND_MAX);
-    g_axes.AXIS_Z +=  (100 + ((uint64_t)rand()*6*cnt)/RAND_MAX);
-    m_axes.AXIS_X +=  (3  + ((uint64_t)rand()*3*cnt)/RAND_MAX);
-    m_axes.AXIS_Y += -(3  + ((uint64_t)rand()*4*cnt)/RAND_MAX);
-    m_axes.AXIS_Z +=  (3  + ((uint64_t)rand()*5*cnt)/RAND_MAX);
+  extern void *MotionCompObj[];
+  LSM6DSL_Object_t *pObj = (LSM6DSL_Object_t *)MotionCompObj[CUSTOM_LSM6DSL_0];
+  int16_t raw_temp = 0;
 
-    q_axes.AXIS_X -= (100  + ((uint64_t)rand()*3*cnt)/RAND_MAX);
-    q_axes.AXIS_Y += (100  + ((uint64_t)rand()*5*cnt)/RAND_MAX);
-    q_axes.AXIS_Z -= (100  + ((uint64_t)rand()*7*cnt)/RAND_MAX);
-  }
-  else {
-    x_axes.AXIS_X += -(10  + ((uint64_t)rand()*3*cnt)/RAND_MAX);
-    x_axes.AXIS_Y +=  (10  + ((uint64_t)rand()*5*cnt)/RAND_MAX);
-    x_axes.AXIS_Z += -(10  + ((uint64_t)rand()*7*cnt)/RAND_MAX);
-    g_axes.AXIS_X += -(100 + ((uint64_t)rand()*2*cnt)/RAND_MAX);
-    g_axes.AXIS_Y +=  (100 + ((uint64_t)rand()*4*cnt)/RAND_MAX);
-    g_axes.AXIS_Z += -(100 + ((uint64_t)rand()*6*cnt)/RAND_MAX);
-    m_axes.AXIS_X += -(3  + ((uint64_t)rand()*7*cnt)/RAND_MAX);
-    m_axes.AXIS_Y +=  (3  + ((uint64_t)rand()*9*cnt)/RAND_MAX);
-    m_axes.AXIS_Z += -(3  + ((uint64_t)rand()*3*cnt)/RAND_MAX);
-
-    q_axes.AXIS_X += (200 + ((uint64_t)rand()*7*cnt)/RAND_MAX);
-    q_axes.AXIS_Y -= (150 + ((uint64_t)rand()*3*cnt)/RAND_MAX);
-    q_axes.AXIS_Z += (10  + ((uint64_t)rand()*5*cnt)/RAND_MAX);
+  if (pObj != NULL)
+  {
+    lsm6dsl_temperature_raw_get(&(pObj->Ctx), &raw_temp);
   }
 
-}
-
-/**
- * @brief  Reset values for all motion sensor data
- * @param  None
- * @retval None
- */
-static void Reset_Motion_Values(void)
-{
-  x_axes.AXIS_X = (x_axes.AXIS_X)%2000 == 0 ? -x_axes.AXIS_X : 10;
-  x_axes.AXIS_Y = (x_axes.AXIS_Y)%2000 == 0 ? -x_axes.AXIS_Y : -10;
-  x_axes.AXIS_Z = (x_axes.AXIS_Z)%2000 == 0 ? -x_axes.AXIS_Z : 10;
-  g_axes.AXIS_X = (g_axes.AXIS_X)%2000 == 0 ? -g_axes.AXIS_X : 100;
-  g_axes.AXIS_Y = (g_axes.AXIS_Y)%2000 == 0 ? -g_axes.AXIS_Y : -100;
-  g_axes.AXIS_Z = (g_axes.AXIS_Z)%2000 == 0 ? -g_axes.AXIS_Z : 100;
-  m_axes.AXIS_X = (g_axes.AXIS_X)%2000 == 0 ? -m_axes.AXIS_X : 3;
-  m_axes.AXIS_Y = (g_axes.AXIS_Y)%2000 == 0 ? -m_axes.AXIS_Y : -3;
-  m_axes.AXIS_Z = (g_axes.AXIS_Z)%2000 == 0 ? -m_axes.AXIS_Z : 3;
-  q_axes.AXIS_X = -q_axes.AXIS_X;
-  q_axes.AXIS_Y = -q_axes.AXIS_Y;
-  q_axes.AXIS_Z = -q_axes.AXIS_Z;
+  /* LSM6DSL temperature: 256 LSB/degC, offset = 25 degC */
+  return 25.0f + ((float)raw_temp / 256.0f);
 }
 
 /**

@@ -23,6 +23,8 @@
 #include "gatt_db.h"
 #include "bluenrg_conf.h"
 #include "bluenrg_gatt_aci.h"
+#include "custom_motion_sensors.h"
+#include "lsm6dsl.h"
 
 /** @brief Macro that stores Value into a buffer in Little Endian Format (2 bytes)*/
 #define HOST_TO_LE_16(buf, val)    ( ((buf)[0] =  (uint8_t) (val)    ) , \
@@ -246,14 +248,42 @@ void Read_Request_CB(uint16_t handle)
 
   if(handle == AccGyroMagCharHandle + 1)
   {
+    /* Read fresh sensor data before responding */
+    CUSTOM_MOTION_SENSOR_Axes_t acc_data, gyro_data;
+    if (CUSTOM_MOTION_SENSOR_GetAxes(CUSTOM_LSM6DSL_0, MOTION_ACCELERO, &acc_data) == BSP_ERROR_NONE)
+    {
+      x_axes.AXIS_X = acc_data.x;
+      x_axes.AXIS_Y = acc_data.y;
+      x_axes.AXIS_Z = acc_data.z;
+    }
+    if (CUSTOM_MOTION_SENSOR_GetAxes(CUSTOM_LSM6DSL_0, MOTION_GYRO, &gyro_data) == BSP_ERROR_NONE)
+    {
+      g_axes.AXIS_X = gyro_data.x;
+      g_axes.AXIS_Y = gyro_data.y;
+      g_axes.AXIS_Z = gyro_data.z;
+    }
+    m_axes.AXIS_X = 0;
+    m_axes.AXIS_Y = 0;
+    m_axes.AXIS_Z = 0;
+
     Acc_Update(&x_axes, &g_axes, &m_axes);
   }
   else if (handle == EnvironmentalCharHandle + 1)
   {
-    float data_t, data_p;
-    data_t = 27.0 + ((uint64_t)rand()*5)/RAND_MAX; //T sensor emulation
-    data_p = 1000.0 + ((uint64_t)rand()*100)/RAND_MAX; //P sensor emulation
-    BlueMS_Environmental_Update((int32_t)(data_p *100), (int16_t)(data_t * 10));
+    /* Read real temperature from LSM6DSL internal sensor */
+    extern void *MotionCompObj[];
+    LSM6DSL_Object_t *pObj = (LSM6DSL_Object_t *)MotionCompObj[0];
+    int16_t raw_temp = 0;
+    float data_t = 25.0f;
+
+    if (pObj != NULL)
+    {
+      lsm6dsl_temperature_raw_get(&(pObj->Ctx), &raw_temp);
+      data_t = 25.0f + ((float)raw_temp / 256.0f);
+    }
+
+    int32_t press = 100000; /* No LPS22HB driver: fixed 1000.00 hPa placeholder */
+    BlueMS_Environmental_Update(press, (int16_t)(data_t * 10));
   }
 
   if(connection_handle !=0)

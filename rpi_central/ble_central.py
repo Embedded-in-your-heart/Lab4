@@ -12,19 +12,22 @@ Usage:    sudo python3 ble_central.py
 import struct
 import signal
 import sys
+import queue
 from bluepy.btle import Scanner, DefaultDelegate, Peripheral, BTLEException
 
 import threading
 
-from flask import Flask, render_template
+from flask import Flask, render_template, request, jsonify
 from flask_socketio import SocketIO
 
 # ---------------------------------------------------------------------------
 # GATT UUIDs (must match gatt_db.c on the STM32 side)
 # ---------------------------------------------------------------------------
-HW_SERVICE_UUID       = "00000000-0001-11e1-9ab4-0002a5d5c51b"
-ENVIRONMENTAL_CHAR_UUID = "00140000-0001-11e1-ac36-0002a5d5c51b"
-ACC_GYRO_MAG_CHAR_UUID  = "00e00000-0001-11e1-ac36-0002a5d5c51b"
+HW_SERVICE_UUID          = "00000000-0001-11e1-9ab4-0002a5d5c51b"
+ENVIRONMENTAL_CHAR_UUID  = "00140000-0001-11e1-ac36-0002a5d5c51b"
+ACC_GYRO_MAG_CHAR_UUID   = "00e00000-0001-11e1-ac36-0002a5d5c51b"
+# characteristic_b: writable sampling frequency (uint16 Hz, 1-100)
+ACC_SAMPLING_FREQ_CHAR_UUID = "00c00000-0001-11e1-ac36-0002a5d5c51b"
 
 SW_SERVICE_UUID       = "00000000-0002-11e1-9ab4-0002a5d5c51b"
 QUATERNIONS_CHAR_UUID = "00000100-0001-11e1-ac36-0002a5d5c51b"
@@ -38,10 +41,29 @@ CCCD_UUID = 0x2902
 app = Flask(__name__)
 socketio = SocketIO(app, async_mode="threading", cors_allowed_origins="*")
 
+# Thread-safe queue: Flask thread puts freq values, BLE thread reads and writes them.
+_freq_write_queue: queue.Queue = queue.Queue()
+
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/set_frequency", methods=["POST"])
+def set_frequency():
+    data = request.get_json(silent=True)
+    if not data or "frequency" not in data:
+        return jsonify({"error": "missing 'frequency' field"}), 400
+    try:
+        freq = int(data["frequency"])
+    except (ValueError, TypeError):
+        return jsonify({"error": "frequency must be an integer"}), 400
+    if freq < 1 or freq > 100:
+        return jsonify({"error": "frequency must be between 1 and 100 Hz"}), 400
+    _freq_write_queue.put(freq)
+    socketio.emit("freq_updated", {"frequency": freq})
+    return jsonify({"ok": True, "frequency": freq})
 
 
 # ---------------------------------------------------------------------------
@@ -223,12 +245,16 @@ def select_device(dev_list):
 def discover_and_subscribe(peripheral):
     """
     Discover HW and SW services, find the target characteristics,
-    enable CCCD notifications on each, and return the handle map.
+    enable CCCD notifications on each, and return (handle_map, freq_write_handle).
+
+    handle_map:        GATT value handle -> characteristic name (for notification dispatch)
+    freq_write_handle: GATT value handle of AccSamplingFreq char (None if not found)
     """
     handle_map = {}
     chars_to_subscribe = []
+    freq_write_handle = None
 
-    target_chars = {
+    notify_chars = {
         ENVIRONMENTAL_CHAR_UUID: "Environmental",
         ACC_GYRO_MAG_CHAR_UUID:  "AccGyroMag",
         QUATERNIONS_CHAR_UUID:   "Quaternions",
@@ -242,8 +268,8 @@ def discover_and_subscribe(peripheral):
             props = ch.propertiesToString()
             print(f"    Char: {uuid_str}  handle=0x{ch.getHandle():04X}  [{props}]")
 
-            if uuid_str in target_chars:
-                name = target_chars[uuid_str]
+            if uuid_str in notify_chars:
+                name = notify_chars[uuid_str]
                 val_handle = ch.getHandle()
                 # Map both the handle and handle+1 so we catch
                 # notifications regardless of bluepy version quirks
@@ -252,7 +278,11 @@ def discover_and_subscribe(peripheral):
                 if "NOTIFY" in props or "INDICATE" in props:
                     chars_to_subscribe.append((ch, name, svc))
 
-    # Enable CCCD for each target characteristic
+            elif uuid_str == ACC_SAMPLING_FREQ_CHAR_UUID:
+                freq_write_handle = ch.getHandle()
+                print(f"  -> Found AccSamplingFreq (characteristic_b) at handle=0x{freq_write_handle:04X}")
+
+    # Enable CCCD for each notify characteristic
     for ch, name, svc in chars_to_subscribe:
         try:
             cccd_handle = ch.getHandle() + 2  # CCCD is typically at value_handle + 1 (i.e. char_handle + 2)
@@ -269,7 +299,7 @@ def discover_and_subscribe(peripheral):
         except BTLEException as e:
             print(f"  !! Failed to enable notifications for {name}: {e}")
 
-    return handle_map
+    return handle_map, freq_write_handle
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +333,7 @@ def main():
             peripheral.connect(dev.addr, dev.addrType)
             print("Connected!")
 
-            handle_map = discover_and_subscribe(peripheral)
+            handle_map, freq_write_handle = discover_and_subscribe(peripheral)
 
             if not handle_map:
                 print("No target characteristics found. Is this the correct device?")
@@ -315,10 +345,27 @@ def main():
 
             print(f"\n{'='*60}")
             print(" Listening for sensor data ... (Ctrl+C to stop)")
+            if freq_write_handle is not None:
+                print(" Frequency control ready (POST /set_frequency)")
+            else:
+                print(" WARNING: AccSamplingFreq characteristic not found")
             print(f"{'='*60}\n")
 
             while True:
-                peripheral.waitForNotifications(1.0)
+                peripheral.waitForNotifications(0.5)
+
+                # Apply any pending frequency change requested via the web dashboard.
+                # All BLE writes must happen in this thread (bluepy is not thread-safe).
+                try:
+                    freq_hz = _freq_write_queue.get_nowait()
+                    if freq_write_handle is not None:
+                        data = struct.pack('<H', freq_hz)
+                        peripheral.writeCharacteristic(freq_write_handle, data, withResponse=False)
+                        print(f"[FREQ] Wrote {freq_hz} Hz to STM32 characteristic_b")
+                    else:
+                        print(f"[FREQ] Ignored: AccSamplingFreq char not discovered")
+                except queue.Empty:
+                    pass
 
         except BTLEException as e:
             print(f"BLE Error: {e}")

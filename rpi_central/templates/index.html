@@ -76,6 +76,26 @@
 
     /* ── Sparkline ── */
     .sparkline { width: 100%; height: 40px; display: block; overflow: visible; }
+
+    /* ── Frequency control ── */
+    .freq-row { display: flex; align-items: center; gap: 12px; margin-top: 6px; flex-wrap: wrap; }
+    .freq-input {
+      background: #0d1117; border: 1px solid #30363d; color: #c9d1d9;
+      font-family: inherit; font-size: 15px; width: 72px; padding: 5px 8px;
+      border-radius: 3px; text-align: right;
+    }
+    .freq-input:focus { outline: none; border-color: #58a6ff; }
+    .freq-unit { color: #8b949e; font-size: 11px; }
+    .freq-btn {
+      background: #21262d; border: 1px solid #30363d; color: #c9d1d9;
+      font-family: inherit; font-size: 11px; padding: 5px 14px;
+      border-radius: 3px; cursor: pointer; letter-spacing: 1px;
+      transition: background 0.15s;
+    }
+    .freq-btn:hover { background: #30363d; }
+    #freq-status { font-size: 11px; }
+    #freq-status.ok  { color: #3fb950; }
+    #freq-status.err { color: #f78166; }
   </style>
 </head>
 <body>
@@ -84,6 +104,22 @@
 <div id="status-bar">
   <span class="title">⬤ BLE SENSOR DASHBOARD</span>
   <span id="status-indicator" class="disconnected">◯ DISCONNECTED</span>
+</div>
+
+<!-- ── SAMPLING FREQUENCY CONTROL ── -->
+<div class="sensor-section">
+  <div class="section-title">── SAMPLING FREQUENCY ────────────────────────</div>
+  <div class="card-row one-col">
+    <div class="card">
+      <div class="label">ACCELEROMETER SAMPLING RATE  (characteristic_b)</div>
+      <div class="freq-row">
+        <input id="freq-input" class="freq-input" type="number" min="1" max="100" value="1">
+        <span class="freq-unit">Hz &nbsp;(1 – 100)</span>
+        <button id="freq-btn" class="freq-btn">SET</button>
+        <span id="freq-status"></span>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ── ENVIRONMENTAL ── -->
@@ -274,6 +310,47 @@
     const sign = v >= 0 ? '+' : '-';
     return sign + String(Math.abs(v)).padStart(4, '0');
   }
+
+  // ── Frequency control ──────────────────────────────────────────────────────
+  function setFreqStatus(msg, isOk) {
+    const el = document.getElementById('freq-status');
+    el.textContent = msg;
+    el.className = isOk ? 'ok' : 'err';
+  }
+
+  document.getElementById('freq-btn').addEventListener('click', () => {
+    const raw = document.getElementById('freq-input').value;
+    const freq = parseInt(raw, 10);
+    if (isNaN(freq) || freq < 1 || freq > 100) {
+      setFreqStatus('ERR: enter 1–100 Hz', false);
+      return;
+    }
+    setFreqStatus('Sending…', true);
+    fetch('/set_frequency', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ frequency: freq })
+    })
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok) {
+          setFreqStatus('Sent → ' + freq + ' Hz', true);
+        } else {
+          setFreqStatus('ERR: ' + (d.error || 'unknown'), false);
+        }
+      })
+      .catch(() => setFreqStatus('ERR: request failed', false));
+  });
+
+  // Allow pressing Enter in the input box
+  document.getElementById('freq-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('freq-btn').click();
+  });
+
+  // Server confirms the write reached the STM32
+  socket.on('freq_updated', (d) => {
+    setFreqStatus('Active → ' + d.frequency + ' Hz', true);
+  });
 </script>
 </body>
 </html>

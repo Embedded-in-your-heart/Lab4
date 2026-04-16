@@ -45,6 +45,10 @@ __IO uint32_t connected = FALSE;
 
 extern uint16_t EnvironmentalCharHandle;
 extern uint16_t AccGyroMagCharHandle;
+extern uint16_t AccSamplingFreqCharHandle;
+
+/* Sampling period in milliseconds (default 1 Hz). Written by the BLE client. */
+volatile uint32_t sampling_period_ms = 1000;
 
 volatile uint8_t request_free_fall_notify = FALSE;
 
@@ -157,6 +161,46 @@ void user_notify(void * pData)
         {
           evt_gatt_read_permit_req *pr = (void*)blue_evt->data;
           Read_Request_CB(pr->attr_handle);
+        }
+        break;
+
+      case EVT_BLUE_GATT_ATTRIBUTE_MODIFIED:
+        {
+          /* Handle differs between IDB04A1 and IDB05A1 (offset field presence) */
+          uint16_t attr_handle;
+          uint8_t  data_length;
+          uint8_t *att_data;
+
+          if (bnrg_expansion_board == IDB05A1)
+          {
+            evt_gatt_attr_modified_IDB05A1 *evt = (void*)blue_evt->data;
+            attr_handle = evt->attr_handle;
+            data_length = evt->data_length;
+            att_data    = evt->att_data;
+          }
+          else
+          {
+            evt_gatt_attr_modified_IDB04A1 *evt = (void*)blue_evt->data;
+            attr_handle = evt->attr_handle;
+            data_length = evt->data_length;
+            att_data    = evt->att_data;
+          }
+
+          /* Client wrote a new sampling frequency to characteristic_b */
+          if (attr_handle == AccSamplingFreqCharHandle + 1 && data_length >= 2)
+          {
+            uint16_t freq_hz = (uint16_t)att_data[0] | ((uint16_t)att_data[1] << 8);
+            if (freq_hz >= 1 && freq_hz <= 100)
+            {
+              sampling_period_ms = 1000U / freq_hz;
+              PRINTF("Sampling frequency updated: %u Hz (%lu ms)\n",
+                     (unsigned)freq_hz, (unsigned long)sampling_period_ms);
+            }
+            else
+            {
+              PRINTF("Rejected invalid frequency: %u Hz (valid: 1-100)\n", (unsigned)freq_hz);
+            }
+          }
         }
         break;
       }

@@ -51,8 +51,11 @@ do {\
 /* Software Characteristics Service */
 #define COPY_SW_SENS_W2ST_SERVICE_UUID(uuid_struct)    COPY_UUID_128(uuid_struct,0x00,0x00,0x00,0x00,0x00,0x02,0x11,0xe1,0x9a,0xb4,0x00,0x02,0xa5,0xd5,0xc5,0x1b)
 #define COPY_QUATERNIONS_W2ST_CHAR_UUID(uuid_struct)   COPY_UUID_128(uuid_struct,0x00,0x00,0x01,0x00,0x00,0x01,0x11,0xe1,0xac,0x36,0x00,0x02,0xa5,0xd5,0xc5,0x1b)
+/* Accelerometer Sampling Frequency Characteristic (UUID: 00C00000-0001-11e1-ac36-0002a5d5c51b) */
+#define COPY_ACC_SAMPLING_FREQ_W2ST_CHAR_UUID(uuid_struct) COPY_UUID_128(uuid_struct,0x00,0xC0,0x00,0x00,0x00,0x01,0x11,0xe1,0xac,0x36,0x00,0x02,0xa5,0xd5,0xc5,0x1b)
 
 uint16_t HWServW2STHandle, EnvironmentalCharHandle, AccGyroMagCharHandle;
+uint16_t AccSamplingFreqCharHandle;
 uint16_t SWServW2STHandle, QuaternionsCharHandle;
 
 /* UUIDS */
@@ -79,8 +82,9 @@ tBleStatus Add_HWServW2ST_Service(void)
   /* Add_HWServW2ST_Service */
   COPY_HW_SENS_W2ST_SERVICE_UUID(uuid);
   BLUENRG_memcpy(&service_uuid.Service_UUID_128, uuid, 16);
+  /* 1+3*5 original records + 2 for AccSamplingFreq (declaration + value, no CCCD) */
   ret = aci_gatt_add_serv(UUID_TYPE_128, service_uuid.Service_UUID_128, PRIMARY_SERVICE,
-                          1+3*5, &HWServW2STHandle);
+                          1+3*5+2, &HWServW2STHandle);
   if (ret != BLE_STATUS_SUCCESS)
     return BLE_STATUS_ERROR;
 
@@ -107,6 +111,18 @@ tBleStatus Add_HWServW2ST_Service(void)
                            ATTR_PERMISSION_NONE,
                            GATT_NOTIFY_READ_REQ_AND_WAIT_FOR_APPL_RESP,
                            16, 0, &AccGyroMagCharHandle);
+  if (ret != BLE_STATUS_SUCCESS)
+    return BLE_STATUS_ERROR;
+
+  /* Fill the AccSamplingFreq BLE Characteristic (2 bytes: uint16_t Hz, writable by client) */
+  COPY_ACC_SAMPLING_FREQ_W2ST_CHAR_UUID(uuid);
+  BLUENRG_memcpy(&char_uuid.Char_UUID_128, uuid, 16);
+  ret = aci_gatt_add_char(HWServW2STHandle, UUID_TYPE_128, char_uuid.Char_UUID_128,
+                          2,
+                          CHAR_PROP_WRITE_WITHOUT_RESP | CHAR_PROP_READ,
+                          ATTR_PERMISSION_NONE,
+                          GATT_NOTIFY_ATTRIBUTE_WRITE,
+                          16, 0, &AccSamplingFreqCharHandle);
   if (ret != BLE_STATUS_SUCCESS)
     return BLE_STATUS_ERROR;
 

@@ -29,6 +29,7 @@
 void Set_DeviceConnectable(void);
 void user_notify(void * pData);
 
+extern volatile uint32_t sampling_period_ms;
 extern uint8_t Application_Max_Attribute_Records[];
 
 #endif /* SENSOR_H */

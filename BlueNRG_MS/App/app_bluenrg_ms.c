@@ -60,11 +60,15 @@ extern AxesRaw_t q_axes;
 
 extern volatile uint8_t set_connectable;
 extern volatile int     connected;
+extern volatile uint32_t sampling_period_ms;
 /* at startup, suppose the X-NUCLEO-IDB04A1 is used */
 uint8_t bnrg_expansion_board = IDB04A1;
 uint8_t bdaddr[BDADDR_SIZE];
 static volatile uint8_t user_button_init_state = 1;
 static volatile uint8_t user_button_pressed = 0;
+
+/* Tick of the last sensor sample/notify cycle */
+static uint32_t last_sample_tick = 0;
 
 /* USER CODE BEGIN PV */
 
@@ -269,46 +273,52 @@ static void User_Process(void)
   }
 
 #if USE_BUTTON
-  /* Check if the user has pushed the button */
   if (user_button_pressed)
   {
-    /* Debouncing */
     HAL_Delay(50);
-
-    /* Wait until the User Button is released */
     while (BSP_PB_GetState(BUTTON_KEY) == !user_button_init_state);
-
-    /* Debouncing */
     HAL_Delay(50);
-#endif
-    BSP_LED_Toggle(LED2);
 
     if (connected)
     {
-      /* Read real sensor data from LSM6DSL */
+      BSP_LED_Toggle(LED2);
       Read_Sensor_Data();
-
-      /* Update Environmental data (temperature from LSM6DSL, no pressure sensor) */
       float temp = Read_LSM6DSL_Temperature();
-      int32_t press = 100000; /* No LPS22HB driver: fixed 1000.00 hPa placeholder */
+      int32_t press = 100000;
       BlueMS_Environmental_Update(press, (int16_t)(temp * 10));
-
-      /* Update Acceleration, Gyroscope and Magnetometer data */
       Acc_Update(&x_axes, &g_axes, &m_axes);
-
-      /* Update Quaternions (simple tilt estimation from accelerometer) */
       q_axes.AXIS_X = x_axes.AXIS_X;
       q_axes.AXIS_Y = x_axes.AXIS_Y;
       q_axes.AXIS_Z = x_axes.AXIS_Z;
       Quat_Update(&q_axes);
-
-#if !USE_BUTTON
-      HAL_Delay(1000); /* wait 1 sec before sending new data */
-#endif
     }
-#if USE_BUTTON
-    /* Reset the User Button flag */
+
     user_button_pressed = 0;
+  }
+#else
+  /* Non-blocking tick-based sampling: send data at the rate set by the BLE client */
+  if (connected)
+  {
+    uint32_t now = HAL_GetTick();
+    if (now - last_sample_tick >= sampling_period_ms)
+    {
+      last_sample_tick = now;
+
+      BSP_LED_Toggle(LED2);
+
+      Read_Sensor_Data();
+
+      float temp = Read_LSM6DSL_Temperature();
+      int32_t press = 100000; /* No LPS22HB driver: fixed 1000.00 hPa placeholder */
+      BlueMS_Environmental_Update(press, (int16_t)(temp * 10));
+
+      Acc_Update(&x_axes, &g_axes, &m_axes);
+
+      q_axes.AXIS_X = x_axes.AXIS_X;
+      q_axes.AXIS_Y = x_axes.AXIS_Y;
+      q_axes.AXIS_Z = x_axes.AXIS_Z;
+      Quat_Update(&q_axes);
+    }
   }
 #endif
 }

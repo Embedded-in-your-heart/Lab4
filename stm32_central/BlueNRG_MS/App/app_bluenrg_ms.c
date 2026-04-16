@@ -54,23 +54,23 @@ void MX_BlueNRG_MS_Init(void)
   hci_reset();
   HAL_Delay(100);
 
-  PRINTF("HWver %d\nFWver %d\n", hwVersion, fwVersion);
+  PRINTF("HWver %d\r\nFWver %d\r\n", hwVersion, fwVersion);
   if (hwVersion > 0x30) {
     bnrg_expansion_board = IDB05A1;
   }
 
   ret = aci_hal_read_config_data(CONFIG_DATA_RANDOM_ADDRESS, BDADDR_SIZE, &bdaddr_len_out, bdaddr);
   if (ret) {
-    PRINTF("Read Static Random address failed.\n");
+    PRINTF("Read Static Random address failed.\r\n");
   }
   if ((bdaddr[5] & 0xC0) != 0xC0) {
-    PRINTF("Static Random address not well formed.\n");
+    PRINTF("Static Random address not well formed.\r\n");
     while (1);
   }
 
   ret = aci_gatt_init();
   if (ret) {
-    PRINTF("GATT_Init failed.\n");
+    PRINTF("GATT_Init failed.\r\n");
   }
 
   /* Init as GAP Central (no GATT server) */
@@ -82,12 +82,12 @@ void MX_BlueNRG_MS_Init(void)
                                &service_handle, &dev_name_char_handle, &appearance_char_handle);
   }
   if (ret != BLE_STATUS_SUCCESS) {
-    PRINTF("GAP_Init failed: 0x%02x\n", ret);
+    PRINTF("GAP_Init failed: 0x%02x\r\n", ret);
   }
 
   aci_hal_set_tx_power_level(1, 4);
 
-  PRINTF("BLE Central initialised.\n");
+  PRINTF("BLE Central initialised.\r\n");
 
   Central_Init();
 }

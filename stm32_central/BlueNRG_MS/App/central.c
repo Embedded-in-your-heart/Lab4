@@ -176,6 +176,12 @@ static void parse_command(const char *line)
 
 static void on_gap_device_found(evt_gap_device_found *dev)
 {
+  /* Print every found device for diagnosis */
+  int8_t rssi = (int8_t)dev->data_RSSI[dev->data_length];
+  PRINTF("[SCAN] dev %02X:%02X:%02X:%02X:%02X:%02X rssi=%d\r\n",
+         dev->bdaddr[5], dev->bdaddr[4], dev->bdaddr[3],
+         dev->bdaddr[2], dev->bdaddr[1], dev->bdaddr[0], (int)rssi);
+
   /* data_RSSI = ad_data[data_length] + rssi[1] */
   if (ad_has_name(dev->data_RSSI, dev->data_length, "BlueNRG")) {
     memcpy(peer_addr, dev->bdaddr, 6);

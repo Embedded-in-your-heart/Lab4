@@ -93,7 +93,7 @@ static void start_scan(void)
           0x0060,              /* scan interval: 60 ms (96 * 0.625 ms) */
           0x0030,              /* scan window:   30 ms (48 * 0.625 ms) */
           STATIC_RANDOM_ADDR,  /* own address type (matches bdaddr loaded from config) */
-          0x00);               /* do not filter duplicates */
+          0x01);               /* filter duplicates */
   if (ret != BLE_STATUS_SUCCESS) {
     PRINTF("[SCAN] start_general_discovery_proc failed: 0x%02x (retry 1s later)\r\n", ret);
     HAL_Delay(1000);
@@ -438,6 +438,16 @@ void Central_EventHandler(void *pData)
         case EVT_BLUE_GATT_PROCEDURE_COMPLETE: {
           evt_gatt_procedure_complete *pc = (void *)blue_evt->data;
           on_gatt_procedure_complete(pc);
+          break;
+        }
+
+        /* GAP general-discovery has a 10.24 s internal timeout; when it
+         * fires we must relaunch the procedure, otherwise scanning dies. */
+        case EVT_BLUE_GAP_PROCEDURE_COMPLETE: {
+          if (state == CENTRAL_STATE_SCANNING) {
+            PRINTF("[SCAN] procedure timeout, restarting ...\r\n");
+            state = CENTRAL_STATE_IDLE;
+          }
           break;
         }
 

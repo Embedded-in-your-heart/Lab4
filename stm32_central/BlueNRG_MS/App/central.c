@@ -90,35 +90,38 @@ static void start_scan(void)
   uint8_t ret;
   PRINTF("[SCAN] Scanning for \"BlueNRG\" ...\r\n");
   ret = aci_gap_start_general_discovery_proc(
-          0x0010,       /* scan interval: 10 ms (16 * 0.625 ms) */
-          0x0010,       /* scan window:   10 ms */
-          PUBLIC_ADDR,  /* own address type */
-          0x00);        /* do not filter duplicates */
+          0x0060,              /* scan interval: 60 ms (96 * 0.625 ms) */
+          0x0030,              /* scan window:   30 ms (48 * 0.625 ms) */
+          STATIC_RANDOM_ADDR,  /* own address type (matches bdaddr loaded from config) */
+          0x00);               /* do not filter duplicates */
   if (ret != BLE_STATUS_SUCCESS) {
-    PRINTF("[SCAN] start_general_discovery_proc failed: 0x%02x\r\n", ret);
+    PRINTF("[SCAN] start_general_discovery_proc failed: 0x%02x (retry 1s later)\r\n", ret);
+    HAL_Delay(1000);
+    return;
   }
   state = CENTRAL_STATE_SCANNING;
 }
 
 /**
- * Parse a BLE AD structure list looking for Complete Local Name (0x09).
- * Returns 1 if the name matches target_name, 0 otherwise.
+ * Scan AD structures for Complete/Shortened Local Name (0x09/0x08)
+ * and copy into out_name (NUL-terminated, bounded by out_size).
+ * Returns the name length written, or 0 if no name field present.
  */
-static int ad_has_name(const uint8_t *ad_data, uint8_t ad_len, const char *target_name)
+static uint8_t ad_get_name(const uint8_t *ad_data, uint8_t ad_len,
+                           char *out_name, uint8_t out_size)
 {
   uint8_t i = 0;
+  out_name[0] = '\0';
   while (i < ad_len) {
-    uint8_t len  = ad_data[i];
+    uint8_t len = ad_data[i];
     if (len == 0 || i + len >= ad_len) break;
     uint8_t type = ad_data[i + 1];
     if (type == 0x09 || type == 0x08) {
-      /* Compare name field (starts at i+2, length = len-1) */
-      uint8_t name_len = len - 1;
-      uint8_t target_len = (uint8_t)strlen(target_name);
-      if (name_len == target_len &&
-          memcmp(&ad_data[i + 2], target_name, name_len) == 0) {
-        return 1;
-      }
+      uint8_t n = len - 1;
+      if (n > out_size - 1) n = out_size - 1;
+      memcpy(out_name, &ad_data[i + 2], n);
+      out_name[n] = '\0';
+      return n;
     }
     i += 1 + len;
   }
@@ -174,26 +177,28 @@ static void parse_command(const char *line)
  * Event handlers (called from Central_EventHandler per state)
  * ---------------------------------------------------------------------------*/
 
-static void on_gap_device_found(evt_gap_device_found *dev)
+static void handle_adv_report(uint8_t bdaddr_type, const uint8_t bdaddr[6],
+                              const uint8_t *ad_rssi, uint8_t data_length)
 {
-  /* Print every found device for diagnosis */
-  int8_t rssi = (int8_t)dev->data_RSSI[dev->data_length];
-  PRINTF("[SCAN] dev %02X:%02X:%02X:%02X:%02X:%02X rssi=%d\r\n",
-         dev->bdaddr[5], dev->bdaddr[4], dev->bdaddr[3],
-         dev->bdaddr[2], dev->bdaddr[1], dev->bdaddr[0], (int)rssi);
+  char name[32];
+  ad_get_name(ad_rssi, data_length, name, sizeof(name));
 
-  /* data_RSSI = ad_data[data_length] + rssi[1] */
-  if (ad_has_name(dev->data_RSSI, dev->data_length, "BlueNRG")) {
-    memcpy(peer_addr, dev->bdaddr, 6);
-    peer_addr_type = dev->bdaddr_type;
+  int8_t rssi = (int8_t)ad_rssi[data_length];
+  PRINTF("[SCAN] dev %02X:%02X:%02X:%02X:%02X:%02X rssi=%d name=\"%s\"\r\n",
+         bdaddr[5], bdaddr[4], bdaddr[3],
+         bdaddr[2], bdaddr[1], bdaddr[0], (int)rssi, name);
+
+  if (strcmp(name, "BlueNRG") == 0) {
+    memcpy(peer_addr, bdaddr, 6);
+    peer_addr_type = bdaddr_type;
     PRINTF("[CONN] Found BlueNRG at %02X:%02X:%02X:%02X:%02X:%02X type=%d\r\n",
            peer_addr[5], peer_addr[4], peer_addr[3],
            peer_addr[2], peer_addr[1], peer_addr[0], peer_addr_type);
     state = CENTRAL_STATE_CONNECTING;
     uint8_t ret = aci_gap_create_connection(
-                    0x0010, 0x0010,           /* scan interval/window */
+                    0x0060, 0x0030,           /* scan interval/window */
                     peer_addr_type, peer_addr, /* peer */
-                    PUBLIC_ADDR,              /* own address type */
+                    STATIC_RANDOM_ADDR,       /* own address type (matches chip config) */
                     0x000C, 0x000C,           /* conn interval min/max (15 ms) */
                     0,                        /* slave latency */
                     0x00C8,                   /* supervision timeout (2000 ms) */
@@ -381,6 +386,20 @@ void Central_EventHandler(void *pData)
       if (meta->subevent == EVT_LE_CONN_COMPLETE) {
         evt_le_connection_complete *cc = (void *)meta->data;
         on_conn_complete(cc);
+      } else if (meta->subevent == EVT_LE_ADVERTISING_REPORT) {
+        /* meta->data: [num_reports:1] then num_reports × le_advertising_info
+         *   [evt_type:1][bdaddr_type:1][bdaddr:6][data_length:1][ad_data+rssi] */
+        if (state != CENTRAL_STATE_SCANNING) break;
+        uint8_t num_reports = meta->data[0];
+        const uint8_t *p = &meta->data[1];
+        for (uint8_t i = 0; i < num_reports; i++) {
+          uint8_t bdaddr_type = p[1];
+          const uint8_t *bdaddr = &p[2];
+          uint8_t data_length = p[8];
+          const uint8_t *ad_rssi = &p[9];
+          handle_adv_report(bdaddr_type, bdaddr, ad_rssi, data_length);
+          p += 9 + data_length + 1;
+        }
       }
       break;
     }
@@ -389,14 +408,6 @@ void Central_EventHandler(void *pData)
     case EVT_VENDOR: {
       evt_blue_aci *blue_evt = (void *)event_pckt->data;
       switch (blue_evt->ecode) {
-
-        case EVT_BLUE_GAP_DEVICE_FOUND: {
-          if (state == CENTRAL_STATE_SCANNING) {
-            evt_gap_device_found *dev = (void *)blue_evt->data;
-            on_gap_device_found(dev);
-          }
-          break;
-        }
 
         case EVT_BLUE_ATT_READ_BY_GROUP_TYPE_RESP: {
           if (state == CENTRAL_STATE_DISC_SERVICES) {

@@ -234,5 +234,10 @@ void EXTI15_10_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+#include "b_l475e_iot01a1.h"
 
+void USART1_IRQHandler(void)
+{
+  HAL_UART_IRQHandler(&huart1);
+}
 /* USER CODE END 1 */

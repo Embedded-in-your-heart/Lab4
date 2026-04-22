@@ -26,6 +26,7 @@
 #include "bluenrg_gap.h"
 #include "bluenrg_gap_aci.h"
 #include "bluenrg_gatt_aci.h"
+#include "bluenrg_l2cap_aci.h"
 #include "bluenrg_aci_const.h"
 #include "b_l475e_iot01a1.h"
 #include "stm32l4xx_hal.h"
@@ -33,11 +34,12 @@
 /* ---------------------------------------------------------------------------
  * External symbols from app_bluenrg_ms.c
  * ---------------------------------------------------------------------------*/
+#define IDB04A1  0
+#define IDB05A1  1
 extern uint8_t bnrg_expansion_board;
 extern uint8_t bdaddr[6];
 
-/* UART handle – huart3 = USART3, routed to ST-LINK VCP */
-extern UART_HandleTypeDef huart3;
+/* UART handle – huart1 = USART1, routed to ST-LINK VCP (defined by BSP) */
 
 /* ---------------------------------------------------------------------------
  * UUID byte arrays (128-bit, little-endian as sent by ATT layer)
@@ -65,13 +67,15 @@ static const uint8_t ACC_FREQ_UUID_LE[16] = {
  * State machine variables
  * ---------------------------------------------------------------------------*/
 static CentralState_t state = CENTRAL_STATE_IDLE;
-static uint16_t conn_handle       = 0;
-static uint16_t hw_start_handle   = 0;
-static uint16_t hw_end_handle     = 0;
-static uint16_t acc_gyro_val_handle = 0;  /* value handle of AccGyroMag */
-static uint16_t freq_val_handle   = 0;    /* value handle of AccSamplingFreq */
-static uint8_t  peer_addr[6]      = {0};
-static uint8_t  peer_addr_type    = 0;
+static uint16_t conn_handle         = 0;
+static uint16_t hw_start_handle     = 0;
+static uint16_t hw_end_handle       = 0;
+static uint16_t acc_gyro_val_handle = 0;
+static uint16_t freq_val_handle     = 0;
+static uint8_t  peer_addr[6]        = {0};
+static uint8_t  peer_addr_type      = 0;
+/* Tick at which we may start GATT discovery (allows post-connect LL settling). */
+static uint32_t disc_ready_tick     = 0;
 
 /* ---------------------------------------------------------------------------
  * UART receive buffer (interrupt-driven, single byte at a time)
@@ -194,17 +198,14 @@ static void handle_adv_report(uint8_t bdaddr_type, const uint8_t bdaddr[6],
     PRINTF("[CONN] Found BlueNRG at %02X:%02X:%02X:%02X:%02X:%02X type=%d\r\n",
            peer_addr[5], peer_addr[4], peer_addr[3],
            peer_addr[2], peer_addr[1], peer_addr[0], peer_addr_type);
+    /* Stop the discovery procedure before connecting; aci_gap_create_connection
+     * cannot be issued while GAP_GENERAL_DISCOVERY_PROC is still active (error 0x0c).
+     * The actual connection is initiated from the EVT_BLUE_GAP_PROCEDURE_COMPLETE
+     * handler once the scan has cleanly stopped. */
     state = CENTRAL_STATE_CONNECTING;
-    uint8_t ret = aci_gap_create_connection(
-                    0x0060, 0x0030,           /* scan interval/window */
-                    peer_addr_type, peer_addr, /* peer */
-                    STATIC_RANDOM_ADDR,       /* own address type (matches chip config) */
-                    0x000C, 0x000C,           /* conn interval min/max (15 ms) */
-                    0,                        /* slave latency */
-                    0x00C8,                   /* supervision timeout (2000 ms) */
-                    0, 0);                    /* CE length min/max */
+    uint8_t ret = aci_gap_terminate_gap_procedure(GAP_GENERAL_DISCOVERY_PROC);
     if (ret != BLE_STATUS_SUCCESS) {
-      PRINTF("[CONN] aci_gap_create_connection failed: 0x%02x\r\n", ret);
+      PRINTF("[CONN] aci_gap_terminate_gap_procedure failed: 0x%02x\r\n", ret);
       state = CENTRAL_STATE_SCANNING;
     }
   }
@@ -213,14 +214,15 @@ static void handle_adv_report(uint8_t bdaddr_type, const uint8_t bdaddr[6],
 static void on_conn_complete(evt_le_connection_complete *cc)
 {
   if (cc->status != BLE_STATUS_SUCCESS) {
-    PRINTF("[CONN] Connection failed (status=0x%02x). Restarting scan ...\r\n", cc->status);
-    state = CENTRAL_STATE_IDLE;
+    PRINTF("[CONN] Connection failed (status=0x%02x). Halting.\r\n", cc->status);
+    state = CENTRAL_STATE_HALTED;
     return;
   }
   conn_handle = cc->handle;
-  PRINTF("[CONN] Connected to %02X:%02X:%02X:%02X:%02X:%02X\r\n",
+  PRINTF("[CONN] Connected to %02X:%02X:%02X:%02X:%02X:%02X interval=%u latency=%u supv_timeout=%u\r\n",
          cc->peer_bdaddr[5], cc->peer_bdaddr[4], cc->peer_bdaddr[3],
-         cc->peer_bdaddr[2], cc->peer_bdaddr[1], cc->peer_bdaddr[0]);
+         cc->peer_bdaddr[2], cc->peer_bdaddr[1], cc->peer_bdaddr[0],
+         cc->interval, cc->latency, cc->supervision_timeout);
 
   /* Reset discovery state */
   hw_start_handle   = 0;
@@ -228,24 +230,20 @@ static void on_conn_complete(evt_le_connection_complete *cc)
   acc_gyro_val_handle = 0;
   freq_val_handle   = 0;
 
-  PRINTF("[DISC] Discovering primary services ...\r\n");
-  uint8_t ret = aci_gatt_disc_all_prim_services(conn_handle);
-  if (ret != BLE_STATUS_SUCCESS) {
-    PRINTF("[DISC] aci_gatt_disc_all_prim_services failed: 0x%02x\r\n", ret);
-    aci_gap_terminate(conn_handle, 0x13);
-    state = CENTRAL_STATE_IDLE;
-    return;
-  }
+  /* Delay GATT discovery by 500 ms to let post-connection LL procedures
+   * (LL_VERSION_REQ, L2CAP parameter update, etc.) finish before we send
+   * the first ATT request. Discovery is triggered from Central_Process. */
+  disc_ready_tick = HAL_GetTick() + 500;
   state = CENTRAL_STATE_DISC_SERVICES;
 }
 
 static void on_disconn_complete(void)
 {
-  PRINTF("[CONN] Disconnected. Restarting scan ...\r\n");
-  conn_handle       = 0;
+  PRINTF("[CONN] Disconnected. Halting.\r\n");
+  conn_handle         = 0;
   acc_gyro_val_handle = 0;
-  freq_val_handle   = 0;
-  state = CENTRAL_STATE_IDLE;
+  freq_val_handle     = 0;
+  state = CENTRAL_STATE_HALTED;
 }
 
 /**
@@ -352,13 +350,26 @@ void Central_Init(void)
   memset(uart_line_buf, 0, sizeof(uart_line_buf));
 
   /* Arm UART RX interrupt – single byte at a time */
-  HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
+  HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
 }
 
 void Central_Process(void)
 {
   if (state == CENTRAL_STATE_IDLE) {
     start_scan();
+    return;
+  }
+
+  if (state == CENTRAL_STATE_DISC_SERVICES && disc_ready_tick != 0 &&
+      HAL_GetTick() >= disc_ready_tick) {
+    disc_ready_tick = 0;
+    PRINTF("[DISC] Discovering primary services ...\r\n");
+    uint8_t ret = aci_gatt_disc_all_prim_services(conn_handle);
+    if (ret != BLE_STATUS_SUCCESS) {
+      PRINTF("[DISC] aci_gatt_disc_all_prim_services failed: 0x%02x\r\n", ret);
+      aci_gap_terminate(conn_handle, 0x13);
+      state = CENTRAL_STATE_HALTED;
+    }
   }
 }
 
@@ -376,9 +387,13 @@ void Central_EventHandler(void *pData)
   switch (event_pckt->evt) {
 
     /* ------------------------------------------------------------------ */
-    case EVT_DISCONN_COMPLETE:
+    case EVT_DISCONN_COMPLETE: {
+      evt_disconn_complete *dc = (void *)event_pckt->data;
+      PRINTF("[CONN] EVT_DISCONN_COMPLETE status=0x%02x reason=0x%02x\r\n",
+             dc->status, dc->reason);
       on_disconn_complete();
       break;
+    }
 
     /* ------------------------------------------------------------------ */
     case EVT_LE_META_EVENT: {
@@ -442,11 +457,59 @@ void Central_EventHandler(void *pData)
         }
 
         /* GAP general-discovery has a 10.24 s internal timeout; when it
-         * fires we must relaunch the procedure, otherwise scanning dies. */
+         * fires we must relaunch the procedure, otherwise scanning dies.
+         * Also fired when we call aci_gap_terminate_gap_procedure() to stop
+         * scanning before initiating a connection. */
         case EVT_BLUE_GAP_PROCEDURE_COMPLETE: {
-          if (state == CENTRAL_STATE_SCANNING) {
-            PRINTF("[SCAN] procedure timeout, restarting ...\r\n");
-            state = CENTRAL_STATE_IDLE;
+          evt_gap_procedure_complete *gpc = (void *)blue_evt->data;
+          PRINTF("[GAP] procedure_complete code=0x%02x status=0x%02x\r\n",
+                 gpc->procedure_code, gpc->status);
+
+          if (gpc->procedure_code == GAP_GENERAL_DISCOVERY_PROC) {
+            if (state == CENTRAL_STATE_CONNECTING) {
+              /* Scan stopped intentionally; now start direct connection.
+               * GAP_DIRECT_CONNECTION_ESTABLISHMENT_PROC (0x40) will fire
+               * inside aci_gap_create_connection — ignore it to avoid a
+               * recursive second call that corrupts the HCI state. */
+              uint8_t ret = aci_gap_create_connection(
+                              0x0060, 0x0030,
+                              peer_addr_type, peer_addr,
+                              STATIC_RANDOM_ADDR,
+                              0x000C, 0x000C,
+                              0,
+                              0x00C8,
+                              0, 0);
+              if (ret != BLE_STATUS_SUCCESS && ret != BLE_STATUS_FAILED) {
+                PRINTF("[CONN] aci_gap_create_connection failed: 0x%02x\r\n", ret);
+                state = CENTRAL_STATE_IDLE;
+              }
+            } else if (state == CENTRAL_STATE_SCANNING) {
+              PRINTF("[SCAN] procedure timeout, restarting ...\r\n");
+              state = CENTRAL_STATE_IDLE;
+            }
+          }
+          /* GAP_DIRECT_CONNECTION_ESTABLISHMENT_PROC (0x40) fires inside
+           * aci_gap_create_connection; EVT_LE_CONN_COMPLETE carries the
+           * real outcome — no action needed here. */
+          break;
+        }
+
+        case EVT_BLUE_L2CAP_CONN_UPD_REQ: {
+          evt_l2cap_conn_upd_req *lr = (void *)blue_evt->data;
+          PRINTF("[L2CAP] conn_upd_req interval=[%u,%u] latency=%u timeout=%u\r\n",
+                 lr->interval_min, lr->interval_max,
+                 lr->slave_latency, lr->timeout_mult);
+          /* Accept the peripheral's connection parameter update request. */
+          if (bnrg_expansion_board == IDB05A1) {
+            aci_l2cap_connection_parameter_update_response_IDB05A1(
+              lr->conn_handle, lr->interval_min, lr->interval_max,
+              lr->slave_latency, lr->timeout_mult, 0, 0,
+              lr->identifier, 0x01);
+          } else {
+            aci_l2cap_connection_parameter_update_response_IDB04A1(
+              lr->conn_handle, lr->interval_min, lr->interval_max,
+              lr->slave_latency, lr->timeout_mult,
+              lr->identifier, 0x01);
           }
           break;
         }
@@ -480,7 +543,7 @@ void Central_EventHandler(void *pData)
  * ---------------------------------------------------------------------------*/
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance != huart3.Instance) return;
+  if (huart->Instance != huart1.Instance) return;
 
   char c = (char)rx_byte;
   if (c == '\r' || c == '\n') {
@@ -496,5 +559,5 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
   }
 
   /* Re-arm for next byte */
-  HAL_UART_Receive_IT(&huart3, &rx_byte, 1);
+  HAL_UART_Receive_IT(&huart1, &rx_byte, 1);
 }

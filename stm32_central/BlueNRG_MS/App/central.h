@@ -19,6 +19,7 @@ typedef enum {
   CENTRAL_STATE_DISC_CHARS,
   CENTRAL_STATE_ENABLE_NOTIF,
   CENTRAL_STATE_CONNECTED,
+  CENTRAL_STATE_HALTED,
 } CentralState_t;
 
 /* Public API ----------------------------------------------------------------*/
